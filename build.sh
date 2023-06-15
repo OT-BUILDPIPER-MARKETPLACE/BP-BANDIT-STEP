@@ -14,10 +14,16 @@ logInfoMessage "I'll scan $WORKSPACE/$CODEBASE_DIR for only [$SCAN_SEVERITY] sev
 
 sleep $SLEEP_DURATION
 
+if [ -d "reports" ]; then
+    true
+else
+    mkdir reports 
+fi
+
 if [ -d $code ];then
   bandit -r $WORKSPACE/$CODEBASE_DIR --severity-level $SCAN_SEVERITY -f json
   logInfoMessage "I'll generate report at [$WORKSPACE/$CODEBASE_DIR]"
-  bandit -r $WORKSPACE/$CODEBASE_DIR --severity-level $SCAN_SEVERITY -f $FORMAT_ARG -o $OUTPUT_ARG
+  bandit -r $WORKSPACE/$CODEBASE_DIR --severity-level $SCAN_SEVERITY -f $FORMAT_ARG -o reports/$OUTPUT_ARG
   logInfoMessage "Congratulations bandit scan succeeded!!!"
   generateOutput $ACTIVITY_SUB_TASK_CODE true "Congratulations bandit scan succeeded!!!"
 else
