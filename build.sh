@@ -3,8 +3,10 @@
 ###############################################
 ### EVENTS TRACKING
 ###############################################
-source log-functions.sh
-source functions.sh
+source /opt/buildpiper/shell-functions/log-functions.sh
+source /opt/buildpiper/shell-functions/functions.sh
+source /opt/buildpiper/shell-functions/mi-functions.sh
+source /opt/buildpiper/shell-functions/file-functions.sh
 
 EVENTS='{}'
 
@@ -43,7 +45,7 @@ add_event() {
 ###############################################
 ### OUTPUT FILE
 ###############################################
-BANDIT_OUTPUT_FILE="${BANDIT_OUTPUT_FILE:-bandit_output.json}"
+BANDIT_OUTPUT_FILE="${BANDIT_OUTPUT_FILE:-${ACTIVITY_SUB_TASK_CODE}_output.json}"
 
 ###############################################
 ### CHECK BANDIT IS INSTALLED
@@ -101,15 +103,14 @@ function checkThreshold() {
   local total=$4
   local breached=0
 
-  logInfoMessage ""
   logInfoMessage "-------------------------------------------"
   logInfoMessage "THRESHOLD CHECK"
   logInfoMessage "  Severity  | Detected | Allowed"
   logInfoMessage "  ----------|----------|--------"
-  printf "  %-9s | %-8s | %s\n" "HIGH"   "$high"   "$([ "$BANDIT_THRESHOLD_HIGH"   == "-1" ] && echo "disabled" || echo "$BANDIT_THRESHOLD_HIGH")"
-  printf "  %-9s | %-8s | %s\n" "MEDIUM" "$medium" "$([ "$BANDIT_THRESHOLD_MEDIUM" == "-1" ] && echo "disabled" || echo "$BANDIT_THRESHOLD_MEDIUM")"
-  printf "  %-9s | %-8s | %s\n" "LOW"    "$low"    "$([ "$BANDIT_THRESHOLD_LOW"    == "-1" ] && echo "disabled" || echo "$BANDIT_THRESHOLD_LOW")"
-  printf "  %-9s | %-8s | %s\n" "TOTAL"  "$total"  "$([ "$BANDIT_THRESHOLD_TOTAL"  == "-1" ] && echo "disabled" || echo "$BANDIT_THRESHOLD_TOTAL")"
+  logInfoMessage "$(printf "  %-9s | %-8s | %s" "HIGH"   "$high"   "$([ "$BANDIT_THRESHOLD_HIGH"   == "-1" ] && echo "disabled" || echo "$BANDIT_THRESHOLD_HIGH")")"
+  logInfoMessage "$(printf "  %-9s | %-8s | %s" "MEDIUM" "$medium" "$([ "$BANDIT_THRESHOLD_MEDIUM" == "-1" ] && echo "disabled" || echo "$BANDIT_THRESHOLD_MEDIUM")")"
+  logInfoMessage "$(printf "  %-9s | %-8s | %s" "LOW"    "$low"    "$([ "$BANDIT_THRESHOLD_LOW"    == "-1" ] && echo "disabled" || echo "$BANDIT_THRESHOLD_LOW")")"
+  logInfoMessage "$(printf "  %-9s | %-8s | %s" "TOTAL"  "$total"  "$([ "$BANDIT_THRESHOLD_TOTAL"  == "-1" ] && echo "disabled" || echo "$BANDIT_THRESHOLD_TOTAL")")"
   logInfoMessage "-------------------------------------------"
 
   # Check HIGH
@@ -327,6 +328,35 @@ fi
 rm -f "$JSON_TEMP"
 
 ###############################################
+### SEND MI DATA IF ENABLED
+###############################################
+if [[ -n "${MI_SERVER_ADDRESS}" ]]; then
+  echo -e "total_issues\n$COUNT_TOTAL" > bandit_sum.csv
+
+  export base64EncodedResponse=$(encodeFileContent bandit_sum.csv)
+  export application="${APPLICATION_NAME:-}"
+  export environment="${PROJECT_ENV_NAME:-$(getProjectEnv)}"
+  export service="${COMPONENT_NAME:-$(getServiceName)}"
+  export organization="${ORGANIZATION:-}"
+  export source_key="${SOURCE_KEY:-bandit}"
+
+  # Must be JSON null (no quotes) or a quoted string - never empty
+  if [[ -z "$REPORT_FILE_PATH" || "$REPORT_FILE_PATH" == "null" ]]; then
+    export report_file_path="null"
+  else
+    export report_file_path="\"$REPORT_FILE_PATH\""
+  fi
+
+  generateMIDataJson /opt/buildpiper/data/mi.template /tmp/bandit.mi
+  logInfoMessage "DEBUG: bandit.mi content: $(cat /tmp/bandit.mi)"
+  if sendMIData /tmp/bandit.mi "${MI_SERVER_ADDRESS}"; then
+    add_event "send mi data" "Successful" "MI data sent" "Metrics sent to $MI_SERVER_ADDRESS"
+  else
+    add_event "send mi data" "Failed" "MI send error" "Failed to send metrics to $MI_SERVER_ADDRESS"
+  fi
+fi
+
+###############################################
 ### SIGNAL PASS/FAIL TO BUILDPIPER PIPELINE
 ### CRITICAL: generateOutput is what actually
 ### stops the pipeline — just exiting is not enough
@@ -339,8 +369,15 @@ elif [[ "${VALIDATION_FAILURE_ACTION:-FAILURE}" == "FAILURE" ]]; then
   generateOutput ${ACTIVITY_SUB_TASK_CODE} false "$FINAL_MESSAGE"
   exit 1
 else
-  logWarningMessage "Bandit scan failed (non-blocking — VALIDATION_FAILURE_ACTION is not FAILURE)."
-  generateOutput ${ACTIVITY_SUB_TASK_CODE} true "$FINAL_MESSAGE"
+    logWarningMessage "Bandit scan failed, but the step is configured as NON-BLOCKING (warning mode).
+
+  If you want the pipeline to FAIL on leaks:
+  - Go to job template settings
+  - Set VALIDATION_FAILURE_ACTION = FAILURE
+
+  Current setting allows pipeline to continue."
+    add_event "validation mode" "Successful" "Non-blocking validation" "Scan failed but pipeline continued because VALIDATION_FAILURE_ACTION is not FAILURE"
+    generateOutput ${ACTIVITY_SUB_TASK_CODE} false "$FINAL_MESSAGE"  
 fi
 
 saveTaskStatus ${TASK_STATUS} ${ACTIVITY_SUB_TASK_CODE}
