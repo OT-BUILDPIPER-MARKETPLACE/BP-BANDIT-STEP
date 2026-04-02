@@ -245,6 +245,41 @@ fi
 ERROR_EVENTS=$(echo "$EVENTS" | jq '[to_entries[] | select(.value.status == "Failed") | .key]')
 
 ###############################################
+### SEND MI DATA IF ENABLED
+###############################################
+
+if [[ -n "${MI_SERVER_ADDRESS}" ]]; then
+    logInfoMessage "MI_SERVER_ADDRESS: ${MI_SERVER_ADDRESS}"
+    echo -e "total_issues\n$COUNT_TOTAL" > bandit_sum.csv
+
+    export base64EncodedResponse=$(encodeFileContent bandit_sum.csv)
+    export application=$APPLICATION_NAME
+    export environment=$environment
+    export service=$service
+    export organization=$ORGANIZATION
+    export source_key=$SOURCE_KEY
+    if [[ -z "$REPORT_FILE_PATH" || "$REPORT_FILE_PATH" == "null" ]]; then
+      export report_file_path=""
+    else
+      export report_file_path="$REPORT_FILE_PATH"
+    fi
+    generateMIDataJson /opt/buildpiper/data/mi.template bandit.mi
+    logInfoMessage "DEBUG: bandit.mi content: $(cat /tmp/bandit.mi)"
+    response=$(sendMIData bandit.mi "${MI_SERVER_ADDRESS}")
+    status=$?
+
+    if [ $status -eq 0 ]; then
+      clean_response=$(echo "$response" | grep -o '{.*}')
+      logInfoMessage "Send MI Data API Response: SUCCESS $clean_response"
+      add_event "send mi data" "Successful" "Send MI Data API Response: SUCCESS" "$response"
+    else
+      clean_response=$(echo "$response" | grep -o '{.*}')
+      logErrorMessage "Send MI Data API Response: FAILED $clean_response"
+      add_event "send mi data" "Failed" "Send MI Data API Response: FAILED" "$response"
+    fi
+  fi
+
+###############################################
 ### MAP STATUS TO BOOLEAN
 ### Matches cloning_repository_output.json format
 ### where build.status is true/false (not a string)
@@ -326,35 +361,6 @@ fi
 ### CLEANUP TEMP FILES
 ###############################################
 rm -f "$JSON_TEMP"
-
-###############################################
-### SEND MI DATA IF ENABLED
-###############################################
-if [[ -n "${MI_SERVER_ADDRESS}" ]]; then
-  echo -e "total_issues\n$COUNT_TOTAL" > bandit_sum.csv
-
-  export base64EncodedResponse=$(encodeFileContent bandit_sum.csv)
-  export application="${APPLICATION_NAME:-}"
-  export environment="${PROJECT_ENV_NAME:-$(getProjectEnv)}"
-  export service="${COMPONENT_NAME:-$(getServiceName)}"
-  export organization="${ORGANIZATION:-}"
-  export source_key="${SOURCE_KEY:-bandit}"
-
-  # Must be JSON null (no quotes) or a quoted string - never empty
-  if [[ -z "$REPORT_FILE_PATH" || "$REPORT_FILE_PATH" == "null" ]]; then
-    export report_file_path="null"
-  else
-    export report_file_path="\"$REPORT_FILE_PATH\""
-  fi
-
-  generateMIDataJson /opt/buildpiper/data/mi.template /tmp/bandit.mi
-  logInfoMessage "DEBUG: bandit.mi content: $(cat /tmp/bandit.mi)"
-  if sendMIData /tmp/bandit.mi "${MI_SERVER_ADDRESS}"; then
-    add_event "send mi data" "Successful" "MI data sent" "Metrics sent to $MI_SERVER_ADDRESS"
-  else
-    add_event "send mi data" "Failed" "MI send error" "Failed to send metrics to $MI_SERVER_ADDRESS"
-  fi
-fi
 
 ###############################################
 ### SIGNAL PASS/FAIL TO BUILDPIPER PIPELINE
